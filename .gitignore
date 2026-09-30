@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.tmp
+# Downloaded/generated game data. This repository is public, and the data belongs to questlog.gg
+# and its community, so keep it local. Regenerate it with `python -m questlog_tl all`.
+data/
