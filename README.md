@@ -40,7 +40,8 @@ The results go in `data/`:
 data/raw/          raw JSON exactly as questlog.gg returns it (~100 MB)
 data/knowledge/
   00_START_HERE.md  what is in the pack and how Claude should use it
-  core/             build data: stats, gear, sets, runes, skills, mastery, community builds, guides
+  core/             build data: stats, gear, sets, runes, skills, mastery, potentials, guides, patch notes
+  community/        most-liked public builds for each of the 45 weapon combos
   extra/            every other database (NPCs, contracts, achievements, codex, recipes, item index…)
 ```
 
@@ -56,6 +57,7 @@ python -m questlog_tl scrape --build-pages 3 --min-likes 5   # more community bu
 python -m questlog_tl scrape --no-community
 python -m questlog_tl scrape --delay 0.5 --workers 2        # be gentler on the site
 python -m questlog_tl export --min-grade 41                 # only Epic+ gear in the gear files
+python -m questlog_tl export --max-builds 2                 # fewer gear sets per community build
 python -m questlog_tl --help
 ```
 
@@ -63,7 +65,8 @@ python -m questlog_tl --help
 
 1. On claude.ai, create a **Project**, for example "Throne and Liberty builds".
 2. Open **Project knowledge** and upload `data/knowledge/00_START_HERE.md` and every file in
-   `data/knowledge/core/`. Add files from `extra/` only if you also want general game answers.
+   `data/knowledge/core/`. Then add `community/community_00_overview.md` and the `community/` files for
+   the weapon combos you play. Add files from `extra/` only if you also want general game answers.
 3. Paste this into the Project's **custom instructions**:
 
    > You are a Throne and Liberty theorycrafter. Use the uploaded questlog.gg knowledge pack as the source of

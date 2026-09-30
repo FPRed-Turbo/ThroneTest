@@ -62,6 +62,7 @@ def scrape_builds(out: Path, min_interval: float, refresh: bool, pages_per_combo
             if page >= data.get("pageCount", 1):
                 break
         index[combo] = [{"url": r["url"], "characterName": r["characterName"], "buildName": r["buildName"],
+                         "buildId": r.get("buildId"),
                          "likeCount": r["likeCount"], "likesLast30Days": r.get("likesLast30Days"),
                          "tags": r.get("tags", []), "weaponTypes": r.get("weaponTypes"), "role": role,
                          "author": (r.get("user") or {}).get("name"), "updatedAt": r.get("updatedAt")}
@@ -73,7 +74,7 @@ def scrape_builds(out: Path, min_interval: float, refresh: bool, pages_per_combo
         if path.exists() and not refresh:
             return
         data = client.call("characterBuilder.getCharacter", {"slug": url})
-        if data.get("status") == "ACCESSIBLE":
+        if data and data.get("status") == "ACCESSIBLE":
             write_json(path, data)
 
     urls = sorted({b["url"] for builds in index.values() for b in builds})

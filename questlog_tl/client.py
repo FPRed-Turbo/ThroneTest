@@ -51,7 +51,8 @@ class QuestlogClient:
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     payload = json.load(resp)
-                return payload["result"]["data"]
+                # tRPC omits "data" when a procedure returns nothing (e.g. an empty build).
+                return payload.get("result", {}).get("data")
             except urllib.error.HTTPError as e:
                 body = e.read().decode("utf-8", "replace")
                 # 4xx other than 429 means bad input / unknown id: do not retry.

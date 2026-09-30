@@ -76,6 +76,12 @@ class Context:
         for name in ("equipment-items", "equipment-runes", "equipment-item-sets"):
             for k, v in (load(raw / "builder" / f"{name}.json", {}) or {}).items():
                 self.names[k] = v.get("name", k)
+                for skill in (v.get("itemPotential") or {}).get("skills") or []:
+                    self.names.setdefault(skill["id"], skill.get("name", skill["id"]))
+                for perk in v.get("availablePerks") or []:
+                    passive = perk.get("passive") or {}
+                    if passive.get("id"):
+                        self.names.setdefault(passive["id"], f"{perk.get('name', '').strip()} ({passive.get('name', '')})")
         for name in ("builder-skill-sets", "builder-skill-traits"):
             for v in load(raw / "builder" / f"{name}.json", []) or []:
                 self.names[v["id"]] = v.get("name", v["id"])
@@ -83,7 +89,9 @@ class Context:
     def name(self, entity_id) -> str:
         return self.names.get(entity_id, str(entity_id)).strip()
 
-    def stat_name(self, stat_id: str) -> str:
+    def stat_name(self, stat_id) -> str:
+        if not isinstance(stat_id, str):
+            return str(stat_id)
         fmt = self.stat_format.get(stat_id)
         return fmt["name"].strip() if fmt else stat_id
 
@@ -459,6 +467,27 @@ def mastery_files(ctx: Context, w: Writer) -> None:
                 cards)
 
 
+def potential_file(ctx: Context, w: Writer) -> None:
+    rows = load(ctx.raw / "lists" / "potential-abilities.json", []) or []
+    cards = []
+    for r in sorted(rows, key=lambda r: (str(r.get("subCategory")), str(r.get("mainCategory")), r.get("name", ""))):
+        d = load(ctx.raw / "details" / "potential-abilities" / f"{re.sub(r'[^A-Za-z0-9._-]', '_', r['id'])}.json") or r
+        lines = [f"### {clean_text(d.get('name', r['id']))} (`{r['id']}`)",
+                 f"- Kind: {d.get('kind')} | gear: {', '.join(d.get('gearTypes') or [d.get('mainCategory', '')])} | "
+                 f"weapon: {', '.join(d.get('weapons') or [str(d.get('subCategory'))])}"]
+        if d.get("description"):
+            lines.append(f"- {clean_text(d['description']).replace(chr(10), ' ')}")
+        rolled = d.get("rolledBy") or []
+        if rolled:
+            names = sorted({f"{x.get('name', '').strip()} ({GRADES.get(x.get('grade'), x.get('grade'))})"
+                            for x in rolled if isinstance(x, dict)})
+            lines.append(f"- Can roll on {len(rolled)} items, e.g. " + ", ".join(names[:12])
+                         + (f" (+{len(names) - 12} more)" if len(names) > 12 else ""))
+        cards.append("\n".join(lines))
+    w.write("potential_abilities", "Potential abilities",
+            "Potential abilities that can roll on gear (mostly +1 skill level for a specific skill).", cards)
+
+
 def generic_dataset(ctx: Context, w: Writer, name: str, title: str, intro: str, prefix: str = "db",
                     folder: str = "extra") -> None:
     rows = load(ctx.raw / "lists" / f"{name}.json", []) or []
@@ -473,7 +502,7 @@ def generic_dataset(ctx: Context, w: Writer, name: str, title: str, intro: str, 
     w.write(f"{prefix}_{name}", title, intro, cards, folder)
 
 
-def community_files(ctx: Context, w: Writer) -> None:
+def community_files(ctx: Context, w: Writer, max_builds: int = 4) -> None:
     base = ctx.raw / "community"
     index = load(base / "index.json", {}) or {}
     if not index:
@@ -489,7 +518,8 @@ def community_files(ctx: Context, w: Writer) -> None:
         summary.append(f"| {combo} | {role} | {len(entries)} | "
                        + (f"{top['characterName']} ({top['likeCount']})" if top else "–") + " |")
     w.write("community_00_overview", "Community builds — overview",
-            "How many well-liked public questlog builds exist per weapon combination.", ["\n".join(summary)])
+            "How many well-liked public questlog builds exist per weapon combination.", ["\n".join(summary)],
+            "community")
 
     for combo, entries in index.items():
         cards = []
@@ -506,13 +536,19 @@ def community_files(ctx: Context, w: Writer) -> None:
                 desc = clean_text(c["desc"])
                 lines.append("- Author's notes:\n" + "\n".join("  > " + l for l in desc.splitlines()[:80]))
             folders = {f["id"]: f["name"] for f in (char.get("folders") or [])}
-            for b in char.get("builds", []):
+            builds = sorted(char.get("builds", []),
+                            key=lambda b: (b.get("id") != e.get("buildId"), b.get("order") or 0))
+            if max_builds and len(builds) > max_builds:
+                lines.append(f"- Showing the featured build and {max_builds - 1} more of {len(builds)} gear sets "
+                             f"(others: {', '.join(clean_text(b.get('name', '')) for b in builds[max_builds:])[:600]})")
+                builds = builds[:max_builds]
+            for b in builds:
                 lines.append(build_block(ctx, b, folders, skill_builds, spec_builds))
             cards.append("\n".join(lines))
         w.write(f"community_{combo}", f"Community builds — {combo} ({CLASS_COMBOS.get(combo, '')})",
                 f"The most popular public questlog.gg character builds for {combo}, most-liked first. Each build lists "
                 "attributes, every gear slot (item, traits, runes, potential, resonance), skill loadout with chosen "
-                "specializations, and weapon mastery nodes.", cards)
+                "specializations, and weapon mastery nodes.", cards, "community")
 
 
 SLOT_ORDER = ["main_hand", "off_hand", "head", "chest", "cloak", "hands", "legs", "feet", "necklace", "bracelet",
@@ -525,21 +561,27 @@ def build_block(ctx: Context, b: dict, folders: dict, skill_builds: dict, spec_b
     if b.get("note"):
         lines.append(f"- Note: {clean_text(b['note']).replace(chr(10), ' ')}")
     if b.get("attributes"):
-        lines.append("- Attribute points: " + ", ".join(f"{ctx.stat_name(k)} {v}" for k, v in b["attributes"].items() if v))
+        lines.append("- Attribute points: " + ", ".join(f"{ctx.stat_name(k)} {v}" for k, v in b["attributes"].items()
+                                                       if isinstance(v, (int, float)) and v))
     eq = b.get("equipment") or {}
     slots = sorted(eq, key=lambda s: SLOT_ORDER.index(s) if s in SLOT_ORDER else 99)
     for slot in slots:
         g = eq[slot]
         if not isinstance(g, dict) or not g.get("id"):
             continue
+        g = {k: v for k, v in g.items() if v not in (None, "", {}, [])}
         bits = [f"**{ctx.name(g['id'])}**"]
-        if g.get("traits"):
+        if isinstance(g.get("traits"), dict):
             bits.append("traits: " + ctx.stats(g["traits"]))
-        if g.get("uniqueTraits"):
+        if isinstance(g.get("uniqueTraits"), dict):
             bits.append("unique: " + ctx.stats(g["uniqueTraits"]))
+        if isinstance(g.get("heroic"), list):
+            g["heroic"] = dict(enumerate(g["heroic"]))
         if g.get("heroic"):
-            bits.append("heroic: " + ", ".join(ctx.stat_name(v) for v in g["heroic"].values()))
-        if g.get("runes"):
+            heroic = [ctx.stat_name(v) for v in g["heroic"].values() if v]
+            if heroic:
+                bits.append("heroic: " + ", ".join(heroic))
+        if isinstance(g.get("runes"), dict):
             bits.append("runes: " + ", ".join(f"{ctx.name(r.get('runeId'))} → {ctx.stat_name(r.get('statId'))} (lvl {r.get('lvl')})"
                                              for r in g["runes"].values() if isinstance(r, dict) and r.get("runeId")))
         if g.get("potential"):
@@ -555,12 +597,13 @@ def build_block(ctx: Context, b: dict, folders: dict, skill_builds: dict, spec_b
         lines.append(f"- Skill build \"{clean_text(sb.get('name', ''))}\" ({sb.get('mainHand')}/{sb.get('offHand')}):")
         for kind in ("active", "passive"):
             for s in sorted(sb.get(kind) or [], key=lambda s: s.get("order", 0)):
-                tr = ", ".join(ctx.name(t) for t in s.get("traits") or [])
+                tr = ", ".join(ctx.name(t) for t in s.get("traits") or [] if t)
                 lines.append(f"  - {kind}: {ctx.name(s.get('skillId'))} lvl {s.get('lvl')}" + (f" — {tr}" if tr else ""))
     spec = spec_builds.get(b.get("weaponSpecializationBuildId"))
     if spec and spec.get("specialization"):
         lines.append("- Weapon mastery nodes: " + ", ".join(f"{ctx.name(n['id'])} {n.get('lvl')}"
-                                                          for n in spec["specialization"]))
+                                                          for n in spec["specialization"]
+                                                          if isinstance(n, dict) and n.get("id")))
     return "\n".join(lines)
 
 
@@ -613,8 +656,10 @@ generation date against the latest patch notes before trusting numbers for very 
 
 ## Which files to use
 
-- `core/` — everything needed to design builds (about a few MB). **Upload this folder to the Claude
-  Project first.**
+- `core/` — the game data needed to design builds (stats, gear, sets, runes, skills, weapon mastery,
+  potentials, guides, patch notes). **Upload this folder to the Claude Project first.**
+- `community/` — the most-liked public player builds for every weapon combination. Upload the overview
+  plus the files for the weapon combos you play (or all of them if the Project has room).
 - `extra/` — the rest of questlog's databases (NPCs, contracts, achievements, codex, recipes, items index…).
   Add these only if you also want Claude to answer general game questions and the Project has room.
 
@@ -629,8 +674,8 @@ generation date against the latest patch notes before trusting numbers for very 
 - `skills_<weapon>.md` — every skill per weapon, level-1 and max-level effects, cooldowns and every
   skill specialization choice.
 - `weapon_mastery_<weapon>.md` — every weapon mastery node with level-1 and max-level effects.
-- `db_potential-abilities.md` — skill-level potentials that can roll on gear.
-- `community_*.md` — the most-liked public player builds per weapon combination, with full gear,
+- `potential_abilities.md` — skill-level potentials that can roll on gear.
+- `community/community_*.md` — the most-liked public player builds per weapon combination, with full gear,
   runes, traits, skill loadouts, specializations and weapon mastery nodes (with author notes).
 - `content_guide.md`, `content_patch_note.md` — questlog guides and patch notes.
 - `extra/db_*.md` — every other questlog database (dungeons, bosses/NPCs, achievements, codex, contracts,
@@ -642,7 +687,7 @@ generation date against the latest patch notes before trusting numbers for very 
 - Stats are shown as the game displays them (raw values have already been multiplied, see the stat dictionary).
   "Lower is better" stats (e.g. Debuff Duration, Attack Speed in seconds) are marked in the dictionary.
 - Heavy Attack Chance = `double_attack`, Critical Hit Chance = `critical_attack`, Endurance = `critical_defense`,
-  Heavy Attack Evasion = `double_defense`, Hit = `accuracy`, Evasion = `evasion`, Cooldown Speed =
+  Heavy Attack Evasion = `double_defense`, Hit Chance = `accuracy`, Evasion = `evasion`, Cooldown Speed =
   `skill_cooldown_modifier` (check `stats_reference.md` for the exact names used by the game).
 - Weapon combos are written `mainhand-offhand` using questlog weapon ids: sword (Sword & Shield), sword2h
   (Greatsword), dagger, bow (Longbow), crossbow, staff, wand (Wand & Tome), spear, orb, gauntlet.
@@ -650,7 +695,7 @@ generation date against the latest patch notes before trusting numbers for very 
 ## How to use it to design a strong build
 
 1. Pick the weapon combo and goal (PvE boss, PvE farm, PvP small-scale, large-scale, tank, healer).
-2. Read `community_<combo>.md` to see what the best-liked builds do and why (author notes).
+2. Read `community/community_<combo>.md` to see what the best-liked builds do and why (author notes).
 3. Use `skills_<weapon>.md` for both weapons to pick actives, passives and specializations that synergise.
 4. Pick gear from `gear_*` and `gear_item_sets.md`: prioritise the stats the skills scale with, then
    choose traits, runes (+ synergies from `runes.md`), potentials and attribute points
@@ -673,7 +718,7 @@ generation date against the latest patch notes before trusting numbers for very 
     w.written.insert(0, path)
 
 
-def export(data_dir: str, max_file_kb: int = 900, min_grade: int = 31) -> list[Path]:
+def export(data_dir: str, max_file_kb: int = 900, min_grade: int = 31, max_builds: int = 4) -> list[Path]:
     raw = Path(data_dir) / "raw"
     if not raw.exists():
         raise SystemExit(f"{raw} not found — run `python -m questlog_tl scrape` first")
@@ -685,13 +730,13 @@ def export(data_dir: str, max_file_kb: int = 900, min_grade: int = 31) -> list[P
     rune_file(ctx, w)
     skill_files(ctx, w)
     mastery_files(ctx, w)
+    potential_file(ctx, w)
     for name, title, intro, folder in (
-        ("potential-abilities", "Potential abilities", "Equipment potential abilities.", "core"),
         ("polymorphs", "Polymorphs (morph appearances)", "Morph appearances and their effects.", "extra"),
         ("litographs", "Lithographs", "Lithographs (craft/unlock recipes for gear).", "extra"),
     ):
         generic_dataset(ctx, w, name, title, intro, folder=folder)
-    community_files(ctx, w)
+    community_files(ctx, w, max_builds)
     content_files(ctx, w)
     done = {"weapon-specializations", "potential-abilities", "polymorphs", "litographs", "item-sets", "skill-traits",
             "skill-sets"}

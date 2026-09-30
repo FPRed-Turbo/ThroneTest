@@ -37,6 +37,8 @@ def main(argv: list[str] | None = None) -> None:
     e.add_argument("--out", default="data", help="data directory (default: data)")
     e.add_argument("--min-grade", type=int, default=31,
                    help="lowest gear grade to detail: 11 common, 21 uncommon, 31 rare (default), 41 epic")
+    e.add_argument("--max-builds", type=int, default=4,
+                   help="gear sets shown per community character, featured first (0 = all; default 4)")
     e.add_argument("--max-file-kb", type=int, default=900,
                    help="split knowledge files larger than this (default 900 KB)")
 
@@ -60,7 +62,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.command in ("export", "all"):
         from .export import export
         for path in export(args.out, max_file_kb=getattr(args, "max_file_kb", 900),
-                           min_grade=getattr(args, "min_grade", 31)):
+                           min_grade=getattr(args, "min_grade", 31),
+                           max_builds=getattr(args, "max_builds", 4)):
             print(path)
 
 
